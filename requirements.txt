@@ -1,0 +1,8 @@
+# 依赖
+
+pynput
+python-sounddevice
+faster-whisper
+torch
+pyperclip
+numpy

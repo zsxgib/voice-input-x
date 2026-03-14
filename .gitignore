@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pyenv-version
+*.wav
+*.mp3
+*.flac
+venv/
+.venv/
