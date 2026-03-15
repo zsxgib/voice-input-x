@@ -126,6 +126,24 @@ class VoiceGUI:
                 pass
             self.root = None
 
+    def hide(self):
+        """隐藏窗口（最小化到托盘）"""
+        if self.root:
+            try:
+                self.root.withdraw()  # 隐藏窗口但不完全销毁
+            except:
+                pass
+
+    def show(self):
+        """显示窗口"""
+        if self.root:
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+            except:
+                pass
+
     def is_active(self) -> bool:
         """检查窗口是否活跃"""
         if self.root is None:

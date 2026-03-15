@@ -16,26 +16,65 @@ def get_window_info(window_id=None):
             )
             window_id = result.stdout.strip()
 
+        if not window_id:
+            print("错误: window_id 为空")
+            return None, "", "", ""
+
         # 获取窗口名
         name_result = subprocess.run(
             ["xdotool", "getwindowname", window_id],
             capture_output=True, text=True
         )
         window_name = name_result.stdout.strip().lower()
+        if name_result.returncode != 0:
+            print(f"getwindowname 失败: {name_result.stderr}")
 
         # 获取窗口类名
+        window_class = ""
         class_result = subprocess.run(
             ["xdotool", "getwindowclassname", window_id],
             capture_output=True, text=True
         )
-        window_class = class_result.stdout.strip().lower()
+        if class_result.returncode != 0:
+            # 尝试使用 xprop
+            try:
+                prop_result = subprocess.run(
+                    ["xprop", "-id", window_id, "WM_CLASS"],
+                    capture_output=True, text=True, timeout=3
+                )
+                if prop_result.returncode == 0 and "WM_CLASS" in prop_result.stdout:
+                    # 格式: WM_CLASS = STRING = "code", "Code"
+                    parts = prop_result.stdout.split('=')
+                    if len(parts) > 1:
+                        window_class = parts[-1].strip().strip('"').split(',')[0].strip().lower()
+            except:
+                pass
+        else:
+            window_class = class_result.stdout.strip().lower()
+        if not window_class:
+            print(f"无法获取窗口类名")
 
         # 获取窗口的进程名
+        pid = ""
         pid_result = subprocess.run(
             ["xdotool", "getwindowpid", window_id],
             capture_output=True, text=True
         )
-        pid = pid_result.stdout.strip()
+        if pid_result.returncode != 0:
+            # 尝试使用 xprop
+            try:
+                prop_result = subprocess.run(
+                    ["xprop", "-id", window_id, "_NET_WM_PID"],
+                    capture_output=True, text=True, timeout=3
+                )
+                if prop_result.returncode == 0 and "_NET_WM_PID" in prop_result.stdout:
+                    parts = prop_result.stdout.split('=')
+                    if len(parts) > 1:
+                        pid = parts[-1].strip()
+            except:
+                pass
+        else:
+            pid = pid_result.stdout.strip()
 
         process_name = ""
         if pid:
@@ -45,11 +84,12 @@ def get_window_info(window_id=None):
                     capture_output=True, text=True
                 )
                 process_name = proc_result.stdout.strip().lower()
-            except:
-                pass
+            except Exception as e:
+                print(f"获取进程名失败: {e}")
 
         return window_id, window_name, window_class, process_name
-    except:
+    except Exception as e:
+        print(f"get_window_info 异常: {e}")
         return None, "", "", ""
 
 
@@ -114,15 +154,86 @@ def inject_text_at_cursor(text, window_id=None):
 
     time.sleep(0.2)
 
-    # 激活窗口后，获取当前活动窗口信息（而不是用原来的 window_id）
-    win_id, window_name, window_class, process_name = get_window_info(None)
-    print(f"窗口: class={window_class}, proc={process_name}, name={window_name[:30]}")
+    # 激活原始窗口
+    if window_id:
+        try:
+            subprocess.run(
+                ["xdotool", "windowactivate", "--sync", window_id],
+                capture_output=True,
+                timeout=5
+            )
+            time.sleep(0.2)
+
+            # 对于 VS Code，尝试查找并激活终端子窗口
+            if 'code' in subprocess.run(
+                ["xdotool", "getwindowclassname", window_id],
+                capture_output=True, text=True
+            ).stdout.strip().lower() or 'vscode' in subprocess.run(
+                ["xdotool", "getwindowclassname", window_id],
+                capture_output=True, text=True
+            ).stdout.strip().lower():
+                # 尝试查找终端子窗口
+                try:
+                    result = subprocess.run(
+                        ["xdotool", "search", "--name", "terminal", "--onlyvisible", window_id],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    terminal_ids = result.stdout.strip().split('\n')
+                    if terminal_ids and terminal_ids[0]:
+                        subprocess.run(
+                            ["xdotool", "windowactivate", "--sync", terminal_ids[0]],
+                            capture_output=True, timeout=5
+                        )
+                        time.sleep(0.1)
+                        print(f"已激活终端子窗口: {terminal_ids[0]}")
+                except Exception as e:
+                    print(f"查找终端子窗口失败: {e}")
+
+        except Exception as e:
+            print(f"激活窗口失败: {e}")
+
+    # 使用传入的 window_id 获取窗口信息
+    win_id, window_name, window_class, process_name = get_window_info(window_id)
+    print(f"窗口: class={window_class}, proc={process_name}, name={window_name[:50]}")
+    print(f"窗口ID: {win_id}")
 
     # 判断是否为终端
     is_terminal = is_terminal_window(window_name, window_class, process_name)
 
-    # 对于 VS Code，尝试两种方式（终端可能在面板中）
-    if 'code' in process_name or 'vscode' in process_name:
+    # 检查是否是 VS Code 终端
+    is_vscode_terminal = ('code' in process_name or 'vscode' in process_name) and ('terminal' in window_name.lower() or 'term' in window_class.lower())
+    if is_vscode_terminal:
+        print("检测到 VS Code 集成终端")
+        is_terminal = True
+
+    # 检查是否是 VS Code 调试终端或集成终端
+    is_vscode_terminal = ('code' in process_name or 'vscode' in process_name) and (
+        'debug' in window_name.lower() or 'repl' in window_name.lower() or
+        'terminal' in window_name.lower() or 'term' in window_class.lower()
+    )
+
+    # 对于 VS Code 终端（调试或集成终端），优先使用 xdotool type
+    if is_vscode_terminal:
+        print("检测到 VS Code 终端，使用 xdotool type...")
+        try:
+            if win_id:
+                subprocess.run(
+                    ["xdotool", "type", "--window", win_id, "--", text],
+                    capture_output=True,
+                    timeout=10
+                )
+            else:
+                subprocess.run(
+                    ["xdotool", "type", "--", text],
+                    capture_output=True,
+                    timeout=10
+                )
+            print("文字已注入 (xdotool type)")
+            return True
+        except Exception as e:
+            print(f"xdotool type 失败: {e}")
+    # 对于普通 VS Code，尝试两种方式
+    elif 'code' in process_name or 'vscode' in process_name:
         print("检测到 VS Code，尝试 Ctrl+Shift+V...")
         if try_inject(text, ["ctrl+shift+v"]):
             print("文字已注入 (Ctrl+Shift+V)")
@@ -147,11 +258,18 @@ def inject_text_at_cursor(text, window_id=None):
     # 备用方式：xdotool type
     print("尝试 xdotool type...")
     try:
-        subprocess.run(
-            ["xdotool", "type", "--", text],
-            capture_output=True,
-            timeout=10
-        )
+        if win_id:
+            subprocess.run(
+                ["xdotool", "type", "--window", win_id, "--", text],
+                capture_output=True,
+                timeout=10
+            )
+        else:
+            subprocess.run(
+                ["xdotool", "type", "--", text],
+                capture_output=True,
+                timeout=10
+            )
         print("文字已注入 (xdotool type)")
         return True
     except Exception as e:

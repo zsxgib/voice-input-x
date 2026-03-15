@@ -7,7 +7,7 @@ from typing import Optional
 @dataclass
 class HotkeyConfig:
     """热键配置"""
-    trigger: str = "alt+d"
+    trigger: str = "alt+d"  # 主热键，可选: alt+d, alt+v, alt+q, alt+z, alt+`
 
 
 @dataclass
