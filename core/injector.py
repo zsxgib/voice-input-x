@@ -114,8 +114,8 @@ def inject_text_at_cursor(text, window_id=None):
 
     time.sleep(0.2)
 
-    # 获取窗口信息
-    win_id, window_name, window_class, process_name = get_window_info(window_id)
+    # 激活窗口后，获取当前活动窗口信息（而不是用原来的 window_id）
+    win_id, window_name, window_class, process_name = get_window_info(None)
     print(f"窗口: class={window_class}, proc={process_name}, name={window_name[:30]}")
 
     # 判断是否为终端
