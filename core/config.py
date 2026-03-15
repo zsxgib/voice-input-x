@@ -6,8 +6,26 @@ from typing import Optional
 
 @dataclass
 class HotkeyConfig:
-    """热键配置"""
-    trigger: str = "alt+d"  # 主热键，可选: alt+d, alt+v, alt+q, alt+z, alt+`
+    """热键配置
+
+    修改以下配置来更改热键:
+    - modifier: 修饰键，多个用 + 分隔
+      可选: "alt", "ctrl", "shift", "alt+shift" 等
+    - key: 触发键
+      可选: "d", "v", "q", "z", "1", "`" 等
+
+    示例:
+      modifier="alt+shift", key="d"  -> Alt+Shift+D
+      modifier="alt", key="v"        -> Alt+V
+      modifier="ctrl+alt", key="1"   -> Ctrl+Alt+1
+    """
+    modifier: str = "alt+shift"
+    key: str = "d"
+
+    @property
+    def trigger(self) -> str:
+        """完整的热键字符串"""
+        return f"{self.modifier}+{self.key}"
 
 
 @dataclass
@@ -24,6 +42,7 @@ class ASRConfig:
     model: str = "large-v3"
     language: str = "zh"
     compute_type: str = "float16"
+    realtime_model: str = "tiny"  # 实时识别用的小模型
 
 
 @dataclass

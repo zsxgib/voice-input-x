@@ -10,6 +10,7 @@ from .recorder import Recorder
 from .recognizer import Recognizer
 from .injector import inject_text
 from .config import config
+from .logger import logger
 
 
 class VoiceApp:
@@ -29,10 +30,17 @@ class VoiceApp:
         self.last_error = None
         self.recognition_done = False
 
+        # 实时识别相关
+        self._realtime_thread = None
+        self._realtime_running = False
+        self._realtime_callback = None  # GUI 回调：实时更新文字
+        self._last_realtime_text = ""  # 上一次识别的文字，避免重复显示
+        self._realtime_recognizing = False  # 是否正在识别中
+        self._realtime_recognizer = None  # 实时识别用的小模型
+
     def log(self, msg: str):
         """日志"""
-        ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] {msg}", flush=True)
+        logger.info(msg)
 
     def init(self):
         """初始化"""
@@ -86,6 +94,10 @@ class VoiceApp:
             self.original_window_class = None
             self.original_window_pid = None
 
+    def set_realtime_callback(self, callback):
+        """设置实时识别回调，用于更新 GUI"""
+        self._realtime_callback = callback
+
     def start_recording(self):
         """开始录音"""
         if self.state != AppState.IDLE:
@@ -99,10 +111,89 @@ class VoiceApp:
         self.recorder.start()
         self.state = AppState.RECORDING
 
+        # 启动实时识别线程
+        self._realtime_running = True
+        self._last_realtime_text = ""
+        self._realtime_thread = threading.Thread(target=self._realtime_recognize, daemon=True)
+        self._realtime_thread.start()
+
+    def _realtime_recognize(self):
+        """实时识别线程：每隔几秒识别一次已录制的音频（非阻塞）"""
+        import os
+
+        # 等待主线程的模型加载完成
+        import time
+        for _ in range(50):  # 最多等 5 秒
+            if self.recognizer.model is not None:
+                break
+            time.sleep(0.1)
+
+        # 复用主线程已加载的 large-v3 模型
+        model = self.recognizer.model
+        if model is None:
+            self.log("警告: 模型未加载，跳过实时识别")
+            return
+        self.log("复用 large-v3 模型进行实时识别")
+
+        interval = 0.05  # 每 0.05 秒检查一次
+
+        while self._realtime_running and self.state == AppState.RECORDING:
+            time.sleep(interval)
+
+            if not self._realtime_running or self.state != AppState.RECORDING:
+                break
+
+            # 如果正在识别中，跳过这次
+            if self._realtime_recognizing:
+                continue
+
+            # 获取临时文件
+            temp_file = self.recorder.get_temp_file() if self.recorder else None
+            if not temp_file or not os.path.exists(temp_file):
+                continue
+
+            # 检查录音是否已开始足够时间（至少 1 秒后开始识别）
+            if self.recorder and self.recorder.start_time:
+                elapsed = time.time() - self.recorder.start_time
+                if elapsed < 1.0:  # 至少录音 1 秒后才开始识别
+                    continue
+
+            # 检查文件是否有足够内容（至少 20KB，约 1.2 秒音频）
+            try:
+                if os.path.getsize(temp_file) < 20000:
+                    continue
+            except:
+                continue
+
+            # 标记为正在识别
+            self._realtime_recognizing = True
+
+            try:
+                # 用 large-v3 模型实时识别
+                segments, info = model.transcribe(temp_file, language=self.recognizer.language, beam_size=1)
+                text = " ".join([seg.text for seg in segments])
+
+                if text and text.strip() and text != self._last_realtime_text:
+                    self._last_realtime_text = text
+                    self.log(f"实时识别: {text}")
+
+                    # 通过回调更新 GUI
+                    if self._realtime_callback:
+                        self._realtime_callback(text)
+            except Exception as e:
+                self.log(f"实时识别错误: {e}")
+            finally:
+                self._realtime_recognizing = False
+
     def stop_recording(self) -> str:
         """停止录音，返回音频路径"""
         if self.state != AppState.RECORDING:
             return None
+
+        # 停止实时识别线程
+        self._realtime_running = False
+        if self._realtime_thread:
+            self._realtime_thread.join(timeout=1)
 
         self.recorder.stop()
         audio_path = tempfile.mktemp(suffix=".wav")
@@ -286,6 +377,10 @@ class VoiceApp:
 
     def reset(self):
         """重置状态"""
+        self._realtime_running = False
+        if self._realtime_thread:
+            self._realtime_thread.join(timeout=1)
+
         self.state = AppState.IDLE
         self.inject_done = False
         self.recorder = None
@@ -293,3 +388,5 @@ class VoiceApp:
         self.original_window_name = None
         self.original_window_class = None
         self.original_window_pid = None
+        self._last_realtime_text = ""
+        self._realtime_recognizing = False

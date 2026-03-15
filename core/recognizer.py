@@ -7,6 +7,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pyannote")
 import torch
 import requests
 
+from .logger import logger
+
 
 class Recognizer:
     def __init__(self, model_name="large-v3", language="zh"):
@@ -21,22 +23,22 @@ class Recognizer:
             from faster_whisper import WhisperModel
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"加载模型: {self.model_name} (设备: {device})")
+            logger.info(f"加载模型: {self.model_name} (设备: {device})")
             self.model = WhisperModel(self.model_name, device=device, compute_type="float16")
-            print("模型加载完成")
+            logger.info("模型加载完成")
         return self.model
 
     def recognize(self, audio_path):
         """识别音频文件"""
         model = self.load_model()
 
-        print(f"识别中: {audio_path}")
+        logger.info(f"识别中: {audio_path}")
         segments, info = model.transcribe(audio_path, language=self.language, beam_size=5)
 
         # 提取文本
         text_parts = [seg.text for seg in segments]
         result = " ".join(text_parts)
-        print(f"识别完成: {len(result)} 字符")
+        logger.info(f"识别完成: {len(result)} 字符")
         return result
 
 
@@ -45,7 +47,7 @@ def llm_refine(text, model="qwen2.5-coder:latest"):
     if not text or len(text) < 2:
         return text
 
-    print(f"LLM 整理: 调用 {model}...")
+    logger.info(f"LLM 整理: 调用 {model}...")
 
     prompt = f"""你是一个专业的文字编辑。请对以下语音识别结果进行优化：
 1. 添加合适的标点符号
@@ -60,25 +62,25 @@ def llm_refine(text, model="qwen2.5-coder:latest"):
 优化后："""
 
     try:
-        print("LLM: 发送请求到 Ollama...")
+        logger.info("LLM: 发送请求到 Ollama...")
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={"model": model, "prompt": prompt, "stream": False},
             timeout=30
         )
-        print(f"LLM: 响应状态 {response.status_code}")
+        logger.info(f"LLM: 响应状态 {response.status_code}")
         if response.status_code == 200:
             result = response.json().get("response", text)
-            print(f"LLM: 整理完成")
+            logger.info("LLM: 整理完成")
             return result.strip()
         else:
-            print(f"LLM: 请求失败 {response.status_code}")
+            logger.warning(f"LLM: 请求失败 {response.status_code}")
     except requests.exceptions.Timeout:
-        print(f"LLM: 请求超时 (30秒)")
+        logger.warning("LLM: 请求超时 (30秒)")
     except requests.exceptions.ConnectionError:
-        print(f"LLM: 无法连接到 Ollama (服务是否启动?)")
+        logger.warning("LLM: 无法连接到 Ollama (服务是否启动?)")
     except Exception as e:
-        print(f"LLM 润色失败: {e}")
+        logger.error(f"LLM 润色失败: {e}")
 
     return text
 
@@ -90,8 +92,8 @@ def recognize_audio(audio_path, model_name="small", language="zh", use_llm=True)
 
     # LLM 润色
     if use_llm and text:
-        print("LLM 润色中...")
+        logger.info("LLM 润色中...")
         text = llm_refine(text)
-        print(f"润色完成: {len(text)} 字符")
+        logger.info(f"润色完成: {len(text)} 字符")
 
     return text

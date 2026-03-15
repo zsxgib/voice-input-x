@@ -4,6 +4,8 @@ import subprocess
 import pyperclip
 import time
 
+from .logger import logger
+
 
 def get_window_info(window_id=None):
     """获取窗口信息"""
@@ -17,7 +19,7 @@ def get_window_info(window_id=None):
             window_id = result.stdout.strip()
 
         if not window_id:
-            print("错误: window_id 为空")
+            logger.warning("window_id 为空")
             return None, "", "", ""
 
         # 获取窗口名
@@ -27,7 +29,7 @@ def get_window_info(window_id=None):
         )
         window_name = name_result.stdout.strip().lower()
         if name_result.returncode != 0:
-            print(f"getwindowname 失败: {name_result.stderr}")
+            logger.warning(f"getwindowname 失败: {name_result.stderr}")
 
         # 获取窗口类名
         window_class = ""
@@ -52,7 +54,7 @@ def get_window_info(window_id=None):
         else:
             window_class = class_result.stdout.strip().lower()
         if not window_class:
-            print(f"无法获取窗口类名")
+            logger.warning("无法获取窗口类名")
 
         # 获取窗口的进程名
         pid = ""
@@ -85,11 +87,11 @@ def get_window_info(window_id=None):
                 )
                 process_name = proc_result.stdout.strip().lower()
             except Exception as e:
-                print(f"获取进程名失败: {e}")
+                logger.warning(f"获取进程名失败: {e}")
 
         return window_id, window_name, window_class, process_name
     except Exception as e:
-        print(f"get_window_info 异常: {e}")
+        logger.error(f"get_window_info 异常: {e}")
         return None, "", "", ""
 
 
@@ -147,9 +149,9 @@ def inject_text_at_cursor(text, window_id=None):
     # 复制到剪贴板
     try:
         pyperclip.copy(text)
-        print(f"已复制到剪贴板: {text[:20]}...")
+        logger.info(f"已复制到剪贴板: {text[:20]}...")
     except Exception as e:
-        print(f"复制失败: {e}")
+        logger.error(f"复制失败: {e}")
         return False
 
     time.sleep(0.2)
@@ -165,13 +167,11 @@ def inject_text_at_cursor(text, window_id=None):
             time.sleep(0.2)
 
             # 对于 VS Code，尝试查找并激活终端子窗口
-            if 'code' in subprocess.run(
+            class_check = subprocess.run(
                 ["xdotool", "getwindowclassname", window_id],
                 capture_output=True, text=True
-            ).stdout.strip().lower() or 'vscode' in subprocess.run(
-                ["xdotool", "getwindowclassname", window_id],
-                capture_output=True, text=True
-            ).stdout.strip().lower():
+            ).stdout.strip().lower()
+            if 'code' in class_check or 'vscode' in class_check:
                 # 尝试查找终端子窗口
                 try:
                     result = subprocess.run(
@@ -185,17 +185,17 @@ def inject_text_at_cursor(text, window_id=None):
                             capture_output=True, timeout=5
                         )
                         time.sleep(0.1)
-                        print(f"已激活终端子窗口: {terminal_ids[0]}")
+                        logger.info(f"已激活终端子窗口: {terminal_ids[0]}")
                 except Exception as e:
-                    print(f"查找终端子窗口失败: {e}")
+                    logger.warning(f"查找终端子窗口失败: {e}")
 
         except Exception as e:
-            print(f"激活窗口失败: {e}")
+            logger.warning(f"激活窗口失败: {e}")
 
     # 使用传入的 window_id 获取窗口信息
     win_id, window_name, window_class, process_name = get_window_info(window_id)
-    print(f"窗口: class={window_class}, proc={process_name}, name={window_name[:50]}")
-    print(f"窗口ID: {win_id}")
+    logger.info(f"窗口: class={window_class}, proc={process_name}, name={window_name[:50]}")
+    logger.info(f"窗口ID: {win_id}")
 
     # 判断是否为终端
     is_terminal = is_terminal_window(window_name, window_class, process_name)
@@ -203,7 +203,7 @@ def inject_text_at_cursor(text, window_id=None):
     # 检查是否是 VS Code 终端
     is_vscode_terminal = ('code' in process_name or 'vscode' in process_name) and ('terminal' in window_name.lower() or 'term' in window_class.lower())
     if is_vscode_terminal:
-        print("检测到 VS Code 集成终端")
+        logger.info("检测到 VS Code 集成终端")
         is_terminal = True
 
     # 检查是否是 VS Code 调试终端或集成终端
@@ -214,7 +214,7 @@ def inject_text_at_cursor(text, window_id=None):
 
     # 对于 VS Code 终端（调试或集成终端），优先使用 xdotool type
     if is_vscode_terminal:
-        print("检测到 VS Code 终端，使用 xdotool type...")
+        logger.info("检测到 VS Code 终端，使用 xdotool type...")
         try:
             if win_id:
                 subprocess.run(
@@ -228,35 +228,35 @@ def inject_text_at_cursor(text, window_id=None):
                     capture_output=True,
                     timeout=10
                 )
-            print("文字已注入 (xdotool type)")
+            logger.info("文字已注入 (xdotool type)")
             return True
         except Exception as e:
-            print(f"xdotool type 失败: {e}")
+            logger.warning(f"xdotool type 失败: {e}")
     # 对于普通 VS Code，尝试两种方式
     elif 'code' in process_name or 'vscode' in process_name:
-        print("检测到 VS Code，尝试 Ctrl+Shift+V...")
+        logger.info("检测到 VS Code，尝试 Ctrl+Shift+V...")
         if try_inject(text, ["ctrl+shift+v"]):
-            print("文字已注入 (Ctrl+Shift+V)")
+            logger.info("文字已注入 (Ctrl+Shift+V)")
             return True
-        print("Ctrl+Shift+V 失败，尝试 Ctrl+V...")
+        logger.info("Ctrl+Shift+V 失败，尝试 Ctrl+V...")
         if try_inject(text, ["ctrl+v"]):
-            print("文字已注入 (Ctrl+V)")
+            logger.info("文字已注入 (Ctrl+V)")
             return True
     elif is_terminal:
         # 终端使用 Ctrl+Shift+V
-        print("检测到终端，使用 Ctrl+Shift+V")
+        logger.info("检测到终端，使用 Ctrl+Shift+V")
         if try_inject(text, ["ctrl+shift+v"]):
-            print("文字已注入 (Ctrl+Shift+V)")
+            logger.info("文字已注入 (Ctrl+Shift+V)")
             return True
     else:
         # 普通应用使用 Ctrl+V
-        print("检测到普通应用，使用 Ctrl+V")
+        logger.info("检测到普通应用，使用 Ctrl+V")
         if try_inject(text, ["ctrl+v"]):
-            print("文字已注入 (Ctrl+V)")
+            logger.info("文字已注入 (Ctrl+V)")
             return True
 
     # 备用方式：xdotool type
-    print("尝试 xdotool type...")
+    logger.info("尝试 xdotool type...")
     try:
         if win_id:
             subprocess.run(
@@ -270,10 +270,10 @@ def inject_text_at_cursor(text, window_id=None):
                 capture_output=True,
                 timeout=10
             )
-        print("文字已注入 (xdotool type)")
+        logger.info("文字已注入 (xdotool type)")
         return True
     except Exception as e:
-        print(f"xdotool type 失败: {e}")
+        logger.error(f"xdotool type 失败: {e}")
         return False
 
 

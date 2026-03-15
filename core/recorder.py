@@ -7,6 +7,10 @@ import subprocess
 import threading
 import time
 import os
+import wave
+import uuid
+
+from .logger import logger
 
 
 class Recorder:
@@ -18,14 +22,18 @@ class Recorder:
         self.start_time = None
         self.stream = None
         self.device = device
+        self.use_sounddevice = False
         self.use_arecord = False
+        self._write_thread = None
+        self._write_running = False
+        self._wave_file = None
 
         # 获取设备支持的采样率
         if device is not None:
             try:
                 d = sd.query_devices(device)
                 self.sample_rate = int(d.get('default_samplerate', 16000))
-                print(f"使用设备 {device}: {d.get('name', '')[:30]}, 采样率: {self.sample_rate}")
+                logger.info(f"使用设备 {device}: {d.get('name', '')[:30]}, 采样率: {self.sample_rate}")
             except:
                 pass
 
@@ -35,41 +43,63 @@ class Recorder:
         self.audio_data = []
         self.start_time = time.time()
 
-        # 使用 ffmpeg 录音 (更稳定)
+        # 优先使用 sounddevice（实时写入文件）
         try:
-            print("使用 ffmpeg 录音")
+            logger.info("使用 sounddevice 录音（实时写入）")
+            self.use_soundfile = True
+            # 使用 UUID 确保每次都是全新的文件
+            self.temp_file = f"/tmp/voice_input_{uuid.uuid4().hex}.wav"
+
+            # 确保目录存在
+            os.makedirs("/tmp", exist_ok=True)
+
+            # 创建 WAV 文件用于实时写入
+            self._wave_file = wave.open(self.temp_file, 'wb')
+            self._wave_file.setnchannels(1)
+            self._wave_file.setsampwidth(2)
+            self._wave_file.setframerate(16000)
+
+            def callback(indata, frames, time_info, status):
+                if status:
+                    logger.debug(f"录音状态: {status}")
+                # 实时写入音频数据到文件
+                audio_int16 = (indata.flatten() * 32767).astype(np.int16)
+                self._wave_file.writeframes(audio_int16.tobytes())
+                self.audio_data.append(indata.copy())
+
+            self.stream = sd.InputStream(
+                device=self.device,
+                samplerate=16000,
+                channels=1,
+                dtype='float32',
+                callback=callback
+            )
+            self.stream.start()
+            logger.info("sounddevice 录音已启动")
+            return
+        except Exception as e:
+            logger.warning(f"sounddevice 失败: {e}")
+
+        # 备用 ffmpeg
+        try:
+            logger.info("使用 ffmpeg 录音")
             self.use_ffmpeg = True
             self.temp_file = tempfile.mktemp(suffix=".wav")
             cmd = ["ffmpeg", "-f", "pulse", "-i", "default", "-ar", "16000", "-ac", "1", "-t", str(self.max_duration), "-y", self.temp_file]
             self.process = subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
             return
         except Exception as e:
-            print(f"ffmpeg 失败: {e}")
+            logger.warning(f"ffmpeg 失败: {e}")
 
-        # 备用 sounddevice
+        # 备用 arecord
         try:
-            def callback(indata, frames, time_info, status):
-                if status:
-                    print(f"录音状态: {status}")
-                self.audio_data.append(indata.copy())
-
-            self.stream = sd.InputStream(
-                device=self.device,
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype='float32',
-                callback=callback
-            )
-            self.stream.start()
-            print("使用 sounddevice 录音")
-        except Exception as e:
-            print(f"sounddevice 失败: {e}")
-            print("使用 arecord 录音 (pulse)")
+            logger.info("使用 arecord 录音 (pulse)")
             self.use_arecord = True
-            # 用 arecord 通过 pulse 录音
             self.temp_file = tempfile.mktemp(suffix=".wav")
             cmd = ["arecord", "-D", "pulse", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", str(self.max_duration), self.temp_file]
             self.process = subprocess.Popen(cmd)
+        except Exception as e:
+            logger.error(f"arecord 也失败: {e}")
 
     def stop(self):
         """停止录音"""
@@ -78,6 +108,13 @@ class Recorder:
             self.stream.stop()
             self.stream.close()
             self.stream = None
+        # 关闭实时写入的 WAV 文件
+        if getattr(self, '_wave_file', None):
+            try:
+                self._wave_file.close()
+            except:
+                pass
+            self._wave_file = None
         elif getattr(self, 'use_ffmpeg', False):
             try:
                 self.process.terminate()
@@ -97,8 +134,15 @@ class Recorder:
                 except:
                     pass
 
+    def get_temp_file(self):
+        """获取当前录音的临时文件路径（用于实时识别）"""
+        return getattr(self, 'temp_file', None)
+
+    def is_recording(self):
+        """检查是否正在录音"""
+        return self.recording
+
     def get_duration(self):
-        """获取已录音时长（秒）"""
         if self.start_time:
             return time.time() - self.start_time
         return 0
@@ -154,7 +198,7 @@ def record_audio(max_duration=300, callback=None):
     recorder = Recorder(max_duration=max_duration)
     recorder.start()
 
-    print(f"录音中... (最长 {max_duration} 秒，按 Enter 结束)")
+    logger.info(f"录音中... (最长 {max_duration} 秒，按 Enter 结束)")
 
     try:
         while recorder.recording:
@@ -162,11 +206,11 @@ def record_audio(max_duration=300, callback=None):
             if callback:
                 callback(duration)
             if duration >= max_duration:
-                print(f"\n已达最大时长 {max_duration} 秒，自动结束")
+                logger.info(f"已达最大时长 {max_duration} 秒，自动结束")
                 break
             time.sleep(0.1)
     except KeyboardInterrupt:
-        print("\n录音取消")
+        logger.info("录音取消")
     finally:
         recorder.stop()
 
